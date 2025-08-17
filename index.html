@@ -785,6 +785,18 @@
       </div>
       <input type="range" id="difficultySlider" min="0" max="4" value="1" style="accent-color: #007BFF;" />
     </div>
+    <div id="adaptiveControls" class="form-group" style="display:none;">
+      <label for="adaptiveAngle" style="font-weight: bold;">
+        Path Angle (°): <span id="adaptiveAngleValue">15</span>
+      </label>
+      <input type="range" id="adaptiveAngle" min="0" max="60" step="1" value="15" />
+
+      <label for="adaptiveSpeed" style="font-weight: bold;">
+        Travel Speed (%): <span id="adaptiveSpeedValue">100</span>
+      </label>
+      <input type="range" id="adaptiveSpeed" min="50" max="200" step="5" value="100" />
+      <small style="color:#fff;opacity:0.9;">Higher % = faster animals.</small>
+    </div>
     <div class="form-group">
       <label>Choose Your Animal:</label>
       <div class="animal-options" id="animalList">
@@ -966,6 +978,11 @@
     if (difficultySlider && difficultyLabel) {
       difficultySlider.addEventListener('input', () => {
         const level = difficultyLevelsMap[difficultySlider.value];
+        // Show custom controls only in Adaptive mode
+        const adaptiveControls = document.getElementById('adaptiveControls');
+        if (adaptiveControls) {
+          adaptiveControls.style.display = (level === 'adaptive') ? 'block' : 'none';
+        }
         // Format label: capitalize first letter, add space before uppercase
         difficultyLabel.textContent = level.charAt(0).toUpperCase() + level.slice(1).replace(/([A-Z])/g, ' $1');
 
@@ -999,6 +1016,21 @@
         difficultySlider.style.accentColor = color;
       });
     }
+
+    // Adaptive controls value mirrors + initial visibility
+    (function initAdaptiveControls(){
+      const angle = document.getElementById('adaptiveAngle');
+      const speed = document.getElementById('adaptiveSpeed');
+      const angleVal = document.getElementById('adaptiveAngleValue');
+      const speedVal = document.getElementById('adaptiveSpeedValue');
+      if (angle && angleVal) angle.addEventListener('input', ()=> angleVal.textContent = angle.value);
+      if (speed && speedVal) speed.addEventListener('input', ()=> speedVal.textContent = speed.value);
+      const adaptiveControls = document.getElementById('adaptiveControls');
+      if (adaptiveControls && difficultySlider) {
+        const level0 = difficultyLevelsMap[difficultySlider.value];
+        adaptiveControls.style.display = (level0 === 'adaptive') ? 'block' : 'none';
+      }
+    })();
 
     // --- AUTHENTICATION LOGIC ---
     let loggedInUser = null;
@@ -1133,6 +1165,11 @@
         animal: selectedAnimal,
         playerName: playerNameInput
       };
+      // Custom knobs for Adaptive mode
+      const angleEl = document.getElementById('adaptiveAngle');
+      const speedEl = document.getElementById('adaptiveSpeed');
+      selections.adaptiveAngleDeg = angleEl ? +angleEl.value : 15;  // default 15°
+      selections.adaptiveSpeedPct = speedEl ? +speedEl.value : 100; // default 100%
       selections.lightsOn = document.getElementById('lightsToggleBtn').classList.contains('active');
       tries = selections.numTries;
       // Store for final score display
@@ -1444,7 +1481,10 @@
       // Determine the appropriate angle for this trial
       let angle = 0;
       if (selections.difficulty === "adaptive") {
-        angle = adaptiveAngles[currentAdaptiveLevel];
+        // Use user-selected angle when in Adaptive; fallback to level-based
+        angle = Number.isFinite(selections.adaptiveAngleDeg)
+          ? selections.adaptiveAngleDeg
+          : adaptiveAngles[currentAdaptiveLevel];
       } else {
         angle = difficultyAngles[usedDifficulty];
       }
@@ -1482,8 +1522,13 @@
         const totalDistancePx = 1600;
         const defaultStimDurationSec = 4;
         const SPEED_PX_PER_SEC = totalDistancePx / defaultStimDurationSec;
-        const animationDuration = (totalDistancePx / SPEED_PX_PER_SEC) * 1000; // ms
-        img.style.animation = `${animClass} ${animationDuration}ms linear 0ms forwards`;
+        const baseDurationMs = (totalDistancePx / SPEED_PX_PER_SEC) * 1000; // ms
+        // 100% = baseline speed; 200% = 2x faster (shorter duration)
+        const speedMultiplier = (selections.difficulty === 'adaptive')
+          ? Math.max(0.1, (selections.adaptiveSpeedPct || 100) / 100)
+          : 1.0;
+        const adjustedDurationMs = baseDurationMs / speedMultiplier;
+        img.style.animation = `${animClass} ${adjustedDurationMs}ms linear 0ms forwards`;
         img.style.transform = `rotate(${angle}deg)`;
         img.style.zIndex = 5;
 
