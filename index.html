@@ -688,6 +688,7 @@
       if (currentTry >= tries) {
         document.getElementById('test').style.display = 'none';
         document.getElementById('gameOver').style.display = 'block';
+        setBackHomeVisible(true); // show on Game Over
         displayFinalScore(); // Ensure score metric is displayed correctly
         return;
       }
@@ -761,7 +762,7 @@
   <button onclick="toggleHowItWorks()" style="position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; font-size: 24px; background-color: #FFD700; color: #000; border: none; border-radius: 50%; width: 50px; height: 50px; box-shadow: 0 0 12px #000; cursor: pointer; font-weight: bold; display: flex; align-items: center; justify-content: center;">
     ?
   </button>
-  <button onclick="window.location.href='https://perceptual-app-beta-1.vercel.app'"
+  <button id="backHomeBtn" onclick="goHome()"
     style="
       position: fixed;
       top: 20px;
@@ -776,8 +777,9 @@
       font-weight: bold;
       cursor: pointer;
       box-shadow: 0 0 10px #000;
+      display: none;
     ">
-    ⬅ Back to Main Site
+    ⬅ Back to Home
   </button>
   <button id="signOutBtn" onclick="signOut()" style="
     position: fixed;
@@ -830,12 +832,14 @@
     function showRegister() {
       document.getElementById('authContainer').style.display = 'none';
       document.getElementById('registerPage').style.display = 'block';
+      setBackHomeVisible(false);
     }
 
     // Switches back to the login form view
     function showLogin() {
       document.getElementById('registerPage').style.display = 'none';
       document.getElementById('authContainer').style.display = 'block';
+      setBackHomeVisible(false);
     }
 
     // Submits registration info and creates a new user in Firestore
@@ -962,6 +966,9 @@
     <h2 style="color: white; font-size: 2.5em; text-shadow: 2px 2px 5px #000;">All Done!</h2>
     <p id="finalScore" style="color: #FFD700; font-size: 2em; font-weight: bold; text-shadow: 2px 2px 5px #000;">Score: 0 / 0</p>
     <button onclick="resetGameAndStart()" style="background-color: #28a745; font-size: 1.5em;">Restart</button>
+    <button onclick="goHome()" style="background-color: #6c757d; font-size: 1.2em; margin-top: 10px; color: white; padding: 10px 25px; border-radius: 10px; border: none; cursor: pointer;">
+      Back to Home
+    </button>
     <button onclick="showFeedbackForm()" style="background-color: #1E90FF; font-size: 1.2em; margin-top: 10px;">Submit Feedback</button>
     <button onclick="viewOverallResults()" style="background-color: orange; font-size: 1.2em; margin-top: 10px; color: white; padding: 10px 25px; border-radius: 10px; border: none; cursor: pointer;">
       Overall Results
@@ -1223,6 +1230,7 @@
             loggedInUser = username;
             document.getElementById('authContainer').style.display = 'none';
             document.getElementById('home').style.display = 'block';
+            setBackHomeVisible(false);
           });
         }
       });
@@ -1265,6 +1273,7 @@
               loginButton.textContent = "Login";
               // Show sign‑out button after login
               document.getElementById("signOutBtn").style.display = "block";
+              setBackHomeVisible(false);
               if (errorMessage) {
                 errorMessage.style.display = "none";
                 errorMessage.textContent = "";
@@ -1379,6 +1388,7 @@
           if (isQuitting) return;
           document.getElementById('countdown').style.display = 'none';
           document.getElementById('test').style.display = 'block';
+          setBackHomeVisible(true); // show only during gameplay
           runTask();
         }
       }, 1000); // Show each number for exactly 1 second
@@ -1613,6 +1623,7 @@
         }
         document.getElementById('test').style.display = 'none';
         document.getElementById('gameOver').style.display = 'block';
+        setBackHomeVisible(true); // show on Game Over
         displayFinalScore(); // Ensure score metric is displayed correctly
         displayResultsChart(); // Display results chart at the end
         
@@ -2865,6 +2876,7 @@
     function showFeedbackForm() {
       document.getElementById('gameOver').style.display = 'none';
       document.getElementById('feedbackForm').style.display = 'block';
+      setBackHomeVisible(false); // hide during feedback form
     }
 
     // Submits user feedback (placeholder)
@@ -2902,6 +2914,7 @@
       document.getElementById('home').style.display = 'block';
       // Optionally reset game state (but do not sign out user or reload)
       resetGameState();
+      setBackHomeVisible(false);
       // Ensure sign out button remains visible if user is logged in
       document.getElementById("signOutBtn").style.display = "block";
     }
@@ -2943,6 +2956,25 @@
       document.getElementById('home').style.display = 'block';
       // Ensure sign out button remains visible
       document.getElementById("signOutBtn").style.display = "block";
+      setBackHomeVisible(false);
+    }
+
+    // Navigates back to the Kids landing page (home) from anywhere
+    function goHome() {
+      const hideIds = ['test', 'countdown', 'gameOver', 'overallResultsPage', 'feedbackForm', 'howItWorks'];
+      hideIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      // Show home
+      const home = document.getElementById('home');
+      if (home) home.style.display = 'block';
+      // Reset game state for a fresh start
+      resetGameState();
+      setBackHomeVisible(false);
+      // Keep sign out visible if logged in
+      const signOutBtn = document.getElementById('signOutBtn');
+      if (signOutBtn && loggedInUser) signOutBtn.style.display = 'block';
     }
 
     // Signs out the current user and returns to the login screen
@@ -2959,8 +2991,15 @@
       document.getElementById('authContainer').style.display = 'block';
       // Reset any other relevant data here
       resetGameState();
+      setBackHomeVisible(false);
     }
   window.quitGame = quitGame;
+
+    // Utility: control top-right Back to Home visibility
+    function setBackHomeVisible(visible) {
+      const btn = document.getElementById('backHomeBtn');
+      if (btn) btn.style.display = visible ? 'inline-block' : 'none';
+    }
 
     // === UTILITY: EVENT LISTENERS AND DOM HOOKS ===
 
@@ -2989,10 +3028,7 @@
       // Add goBackButton event for overallResultsPage
       const goBackBtn = document.getElementById("goBackButton");
       if (goBackBtn) {
-        goBackBtn.addEventListener("click", () => {
-          document.getElementById("overallResultsPage").style.display = "none";
-          document.getElementById("home").style.display = "block";
-        });
+        goBackBtn.addEventListener("click", goHome);
       }
     });
     // === RESULTS VISUALIZATION: OVERALL SESSION HISTORY ===
@@ -3001,6 +3037,7 @@
     function viewOverallResults() {
       document.getElementById("gameOver").style.display = "none";
       document.getElementById("overallResultsPage").style.display = "block";
+      setBackHomeVisible(false); // hide on overall results
       loadOverallResults();
     }
 
@@ -3008,6 +3045,7 @@
     function returnToEndScreen() {
       document.getElementById("overallResultsPage").style.display = "none";
       document.getElementById("gameOver").style.display = "block";
+      setBackHomeVisible(true); // show again on Game Over
     }
 
     // Loads and renders the overall session history from Firestore for the user
