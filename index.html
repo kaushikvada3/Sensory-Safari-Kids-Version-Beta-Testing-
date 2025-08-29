@@ -8,6 +8,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Sensory Safari</title>
   <style>
+    /* --- Results Timeline & Animations --- */
+    .timeline-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+    .result-card {
+      background: rgba(255,255,255,0.95);
+      color: #000; border-radius: 12px; padding: 12px 12px 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+      transform: translateY(10px) scale(0.98); opacity: 0; animation: cardIn 420ms ease forwards; transition: transform 180ms ease;
+      cursor: pointer; border-left: 6px solid transparent;
+    }
+    .result-card:hover { transform: translateY(0) scale(1.02); }
+    .result-card.correct { border-left-color: #2ecc71; }
+    .result-card.incorrect { border-left-color: #e74c3c; }
+    .result-card.miss { border-left-color: #f1c40f; }
+    .result-card h4 { margin: 0 0 6px; font-size: 1.05em; }
+    .result-card .meta { font-size: 0.85em; color: #333; line-height: 1.25; }
+    .result-card .badge { display:inline-block; padding:2px 8px; border-radius: 10px; font-size: 0.75em; margin-right: 6px; }
+    .badge.type-none { background:#ecf0f1; color:#34495e; }
+    .badge.type-sound { background:#d6f5f5; color:#0e5a5a; }
+    .badge.type-visual { background:#fbe6ff; color:#6a1b9a; }
+    .badge.type-both { background:#ffe8d6; color:#8e4400; }
+    .result-card .details { margin-top: 8px; display: none; font-size: 0.85em; }
+    .result-card.open .details { display: block; }
+    @keyframes cardIn { to { transform: translateY(0) scale(1); opacity: 1; } }
     #registerPage {
       max-width: 700px;
       width: 90%;
@@ -862,16 +884,12 @@
       <input type="range" id="difficultySlider" min="0" max="4" value="1" style="accent-color: #007BFF;" />
     </div>
     <div id="adaptiveControls" class="form-group" style="display:none;">
-      <label for="adaptiveAngle" style="font-weight: bold;">
-        Path Angle (°): <span id="adaptiveAngleValue">15</span>
-      </label>
-      <input type="range" id="adaptiveAngle" min="0" max="60" step="1" value="15" />
-
-      <label for="adaptiveSpeed" style="font-weight: bold;">
-        Travel Speed (%): <span id="adaptiveSpeedValue">100</span>
-      </label>
-      <input type="range" id="adaptiveSpeed" min="50" max="200" step="5" value="100" />
-      <small style="color:#fff;opacity:0.9;">Higher % = faster animals.</small>
+      <label for="adaptiveMode" style="font-weight: bold;">Adaptive Mode:</label>
+      <select id="adaptiveMode" style="padding: 8px; border-radius: 8px;">
+        <option value="standard">Adaptive</option>
+        <option value="fast">Adaptive (Fast)</option>
+      </select>
+      <small style="color:#fff;opacity:0.9;">Fast = 1.35× speed; spacing unchanged.</small>
     </div>
     <div class="form-group">
       <label>Choose Your Animal:</label>
@@ -980,9 +998,32 @@
 
   <div id="chartContainer" style="display: none; text-align: center; margin-top: 30px; background-color: rgba(255, 255, 255, 0.8); padding: 20px; border-radius: 12px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); width: 100%; max-width: 100%;">
     <h2 style="color: black;">Trial Results</h2>
+    <div id="resultsSummary" style="color:#000; font-weight:600; margin-top:6px;">
+      <!-- filled at runtime -->
+    </div>
+    <div id="resultsControls" style="display:flex; gap:10px; justify-content:center; align-items:center; flex-wrap:wrap; margin:10px 0 0 0;">
+      <label style="color:#000; font-weight:bold;">Filter:</label>
+      <select id="filterType" style="padding:6px 10px; border-radius:8px;">
+        <option value="all">All Types</option>
+        <option value="none">No Distractors</option>
+        <option value="sound">Auditory</option>
+        <option value="visual">Visual</option>
+        <option value="both">Both</option>
+      </select>
+      <select id="filterCorrect" style="padding:6px 10px; border-radius:8px;">
+        <option value="all">All Outcomes</option>
+        <option value="correct">Correct</option>
+        <option value="incorrect">Incorrect</option>
+        <option value="miss">Missed</option>
+      </select>
+      <label style="color:#000; display:flex; align-items:center; gap:6px;">
+        <input id="toggleDetails" type="checkbox" /> Show details
+      </label>
+    </div>
     <canvas id="noDistractorChart" style="max-width: 600px; width: 100%; margin: 20px auto; display: block;"></canvas>
     <canvas id="auditoryDistractorChart" style="max-width: 600px; width: 100%; margin: 20px auto; display: block;"></canvas>
     <canvas id="visualDistractorChart" style="max-width: 600px; width: 100%; margin: 20px auto; display: block;"></canvas>
+    <div id="trialTimeline" style="margin-top: 10px;"></div>
   </div>
 
   <script>
@@ -1032,6 +1073,54 @@
     let totalTries = 0;   // total number of trials for this game session
     // One speed for all difficulties; durations/paths change, speed does not.
     const GLOBAL_BASE_SPEED_PX_PER_SEC = 400;
+    // --- Adaptive policy & levels (single source of truth) ---
+    const ADAPTIVE_EASY_ANGLE = 15; // choose 15° for Level 0 (diagonal feel)
+    const ADAPTIVE_ANGLES = [ADAPTIVE_EASY_ANGLE, 45, 67.5, 75];
+    const ADAPTIVE_POLICY = 'up_only'; // 'up_only' or 'up_down'
+    const ADAPTIVE_K = 4; // consecutive for promotion/demotion
+    const ADAPTIVE_MIN_TRIALS = 15; // Tmin
+    const ADAPTIVE_FAST_MULTIPLIER = 1.35; // speed multiplier for Fast mode
+
+    // Adaptive runtime state
+    let adaptiveState = {
+      level: 0,
+      streakUp: 0,
+      streakDown: 0,
+      trialsRun: 0,
+      speedMode: 'standard'
+    };
+
+    function resetAdaptiveState(mode) {
+      adaptiveState = { level: 0, streakUp: 0, streakDown: 0, trialsRun: 0, speedMode: mode || 'standard' };
+    }
+
+    function updateAdaptiveState(wasCorrect) {
+      adaptiveState.trialsRun++;
+      if (wasCorrect) {
+        adaptiveState.streakUp++;
+        adaptiveState.streakDown = 0;
+      } else {
+        adaptiveState.streakDown++;
+        adaptiveState.streakUp = 0;
+      }
+      if (ADAPTIVE_POLICY === 'up_only') {
+        if (adaptiveState.streakUp >= ADAPTIVE_K && adaptiveState.level < 3) {
+          adaptiveState.level++;
+          adaptiveState.streakUp = 0;
+          adaptiveState.streakDown = 0;
+        }
+      } else {
+        if (adaptiveState.streakUp >= ADAPTIVE_K && adaptiveState.level < 3) {
+          adaptiveState.level++;
+          adaptiveState.streakUp = 0;
+          adaptiveState.streakDown = 0;
+        } else if (adaptiveState.streakDown >= ADAPTIVE_K && adaptiveState.level > 0) {
+          adaptiveState.level--;
+          adaptiveState.streakUp = 0;
+          adaptiveState.streakDown = 0;
+        }
+      }
+    }
 
     // === GAME INITIALIZATION AND START ===
 
@@ -1245,15 +1334,24 @@
         animal: selectedAnimal,
         playerName: playerNameInput
       };
-      // Custom knobs for Adaptive mode
-      const angleEl = document.getElementById('adaptiveAngle');
-      const speedEl = document.getElementById('adaptiveSpeed');
-      selections.adaptiveAngleDeg = angleEl ? +angleEl.value : 15;  // default 15°
-      selections.adaptiveSpeedPct = speedEl ? +speedEl.value : 100; // default 100%
+      // Adaptive mode setup
+      if (selectedDifficulty === 'adaptive') {
+        const modeEl = document.getElementById('adaptiveMode');
+        const mode = modeEl ? modeEl.value : 'standard';
+        selections.adaptiveSpeedMode = mode;
+        selections.adaptiveSpeedMultiplier = (mode === 'fast') ? ADAPTIVE_FAST_MULTIPLIER : 1.0;
+        // Reset adaptive state for this session
+        resetAdaptiveState(mode);
+      }
       selections.lightsOn = document.getElementById('lightsToggleBtn').classList.contains('active');
-      tries = selections.numTries;
+      // Trials: enforce Tmin for Adaptive
+      if (selectedDifficulty === 'adaptive') {
+        tries = Math.max(selections.numTries, ADAPTIVE_MIN_TRIALS);
+      } else {
+        tries = selections.numTries;
+      }
       // Store for final score display
-      totalTries = selections.numTries;
+      totalTries = tries;
       document.getElementById('home').style.display = 'none';
       document.getElementById('howItWorks').style.display = 'none'; // hide instructions
       document.getElementById('countdown').style.display = 'block';
@@ -1331,8 +1429,12 @@
 
       // Record latency for this trial
       window.responseGiven = true;
-      const latency = (Date.now() - trialStartTime) / 1000;
-      if (trialResults.length > 0) trialResults[trialResults.length - 1].latency = latency;
+      const latencySec = (Date.now() - trialStartTime) / 1000;
+      if (trialResults.length > 0) {
+        const t = trialResults[trialResults.length - 1];
+        t.latency = latencySec;
+        t.latencyMs = Math.round(latencySec * 1000);
+      }
 
       const lastTrial = trialResults[trialResults.length - 1];
       let isCorrect = false;
@@ -1359,7 +1461,11 @@
         if (performanceTracker.length > 2) performanceTracker.shift(); // keep last 2 only
       }
 
-      adjustDifficulty(); // Adjust difficulty dynamically
+      if (selections && selections.difficulty === 'adaptive') {
+        updateAdaptiveState(isCorrect);
+      } else {
+        adjustDifficulty(); // legacy adaptive for non-adaptive mode
+      }
       showFeedbackImage(isCorrect); // Show feedback image after response
     }
 
@@ -1377,10 +1483,18 @@
       const lastTrial = trialResults[trialResults.length - 1];
       lastTrial.correct = false; // Mark the last trial as incorrect
       // Record latency as null for missed responses
-      if (trialResults.length > 0) trialResults[trialResults.length - 1].latency = null;
+      if (trialResults.length > 0) {
+        const t = trialResults[trialResults.length - 1];
+        t.latency = null;
+        t.latencyMs = null;
+      }
       performanceTracker.push('wrong');
       if (performanceTracker.length > 2) performanceTracker.shift(); // keep last 2 only
-      adjustDifficulty(); // Adjust difficulty dynamically
+      if (selections && selections.difficulty === 'adaptive') {
+        updateAdaptiveState(false);
+      } else {
+        adjustDifficulty();
+      }
       showFeedbackImage(false); // Show incorrect feedback image
     }
 
@@ -1584,7 +1698,7 @@
       const direction = Math.random() > 0.5 ? 'Forward' : 'Backward';
       let usedDifficulty;
       if (selections.difficulty === 'adaptive') {
-        usedDifficulty = currentDifficulty;
+        usedDifficulty = 'adaptive';
       } else {
         usedDifficulty = selections.difficulty;
       }
@@ -1602,7 +1716,18 @@
       let veryHardLockedTiltDeg = null; // ±75°
       let veryHardDir = null;
 
-      if (usedDifficulty === 'medium') {
+      if (usedDifficulty === 'adaptive') {
+        // Adaptive: pick random diagonal each trial; angle from level table
+        const dirs = ['TL_BR', 'BR_TL', 'TR_BL', 'BL_TR'];
+        const pickDir = dirs[Math.floor(Math.random() * dirs.length)];
+        window._adaptiveDir = pickDir;
+        const thetaAbs = ADAPTIVE_ANGLES[adaptiveState.level];
+        animName = null; // use stream engine
+        // Determine horizontal drift for correctness mapping
+        var goesRightForAdaptive = (pickDir === 'TL_BR' || pickDir === 'BL_TR');
+        // Telemetry line for visibility
+        console.log(`[Adaptive] level=${adaptiveState.level} θ=${thetaAbs}° dir=${pickDir} expected=${goesRightForAdaptive ? 'Right (Q)' : 'Left (P)'} mode=${adaptiveState.speedMode}`);
+      } else if (usedDifficulty === 'medium') {
         // Medium: continuous stream along one 45° diagonal through center
         const dirs = ['TL_BR', 'BR_TL', 'TR_BL', 'BL_TR']; // four diagonals
         const mediumDir = dirs[Math.floor(Math.random() * dirs.length)];
@@ -1645,43 +1770,14 @@
         animName = mapping[usedDifficulty];
       }
 
-      // --- Tilt Angle Mapping by Difficulty ---
-      // Standard difficulty-to-angle mapping (degrees)
-      const difficultyAngles = {
-        easy: 0,
-        medium: 15,
-        hard: 30,
-        veryHard: 45
-      };
-      // For adaptive mode: track current adaptive level (0=easy, 1=medium, 2=hard, 3=veryhard)
-      let currentAdaptiveLevel = 1; // default to 'medium'
-      // Map usedDifficulty to adaptive level index if in adaptive mode
-      if (selections.difficulty === "adaptive") {
-        // Map currentDifficulty string to index
-        const adaptiveLevelMap = { easy: 0, medium: 1, hard: 2, veryHard: 3 };
-        currentAdaptiveLevel = adaptiveLevelMap[currentDifficulty] ?? 1;
-      }
-      // Adaptive angles array (degrees)
-      const adaptiveAngles = [0, 15, 30, 45];
-      // Determine the appropriate angle for this trial
+      // --- Tilt mapping only used for non-adaptive CSS/keyframe paths ---
       let angle = 0;
-      if (selections.difficulty === "adaptive") {
-        // Use user-selected angle when in Adaptive; fallback to level-based
-        angle = Number.isFinite(selections.adaptiveAngleDeg)
-          ? selections.adaptiveAngleDeg
-          : adaptiveAngles[currentAdaptiveLevel];
-      } else {
+      if (usedDifficulty !== 'adaptive') {
+        const difficultyAngles = { easy: 0, medium: 15, hard: 30, veryHard: 45 };
         angle = difficultyAngles[usedDifficulty];
-      }
-      // Log the angle for visual confirmation
-      console.log("Tilt angle applied:", angle);
-
-      // Override tilt for Medium: lock to +45° or -45° based on diagonal
-      if (usedDifficulty === 'medium' && mediumLockedTiltDeg !== null) {
-        angle = mediumLockedTiltDeg;
-      }
-      if (usedDifficulty === 'hard' && hardLockedTiltDeg !== null) {
-        angle = hardLockedTiltDeg;   // lock tilt to ±67.5° for HARD
+        // Override tilt for Medium/Hard when applicable
+        if (usedDifficulty === 'medium' && mediumLockedTiltDeg !== null) angle = mediumLockedTiltDeg;
+        if (usedDifficulty === 'hard' && hardLockedTiltDeg !== null) angle = hardLockedTiltDeg;
       }
       if (usedDifficulty === 'veryHard' && veryHardLockedTiltDeg !== null) {
         angle = veryHardLockedTiltDeg; // lock tilt to ±75° for VERY HARD
@@ -1867,7 +1963,7 @@
         const baseDurationMs = (totalDistancePx / SPEED_PX_PER_SEC) * 1000; // ms
         // 100% = baseline speed; 200% = 2x faster (shorter duration)
         const speedMultiplier = (selections.difficulty === 'adaptive')
-          ? Math.max(0.1, (selections.adaptiveSpeedPct || 100) / 100)
+          ? Math.max(0.1, (selections.adaptiveSpeedMultiplier || 1.0))
           : 1.0;
         const adjustedDurationMs = baseDurationMs / speedMultiplier;
         img.style.animation = `${animName} ${adjustedDurationMs}ms linear 0ms forwards`;
@@ -1891,6 +1987,9 @@
         startStreamEngine(hardDir, 67.5);
       } else if (usedDifficulty === 'medium') {
         startStreamEngine(window._mediumDir, 45);
+      } else if (usedDifficulty === 'adaptive') {
+        const speedMult = selections.adaptiveSpeedMultiplier || 1.0;
+        startStreamEngine(window._adaptiveDir, ADAPTIVE_ANGLES[adaptiveState.level], speedMult);
       } else if (usedDifficulty === 'veryHard') {
         // Unified stream engine at 75°
         startStreamEngine(veryHardDir, 75);
@@ -1915,9 +2014,9 @@
       // --- Generic Stream Engine: continuous train for any |θ| ---
       // dir: 'TL_BR' | 'BR_TL' | 'TR_BL' | 'BL_TR'
       // thetaAbsDeg: 45, 67.5, 75 based on difficulty
-      function startStreamEngine(dir, thetaAbsDeg) {
+      function startStreamEngine(dir, thetaAbsDeg, speedMult = 1.0) {
         const waveContainer = document.getElementById('wave-container');
-        const SPEED = GLOBAL_BASE_SPEED_PX_PER_SEC;     // px/s (global constant)
+        const SPEED = GLOBAL_BASE_SPEED_PX_PER_SEC * Math.max(0.1, speedMult);     // px/s (global constant * multiplier)
         const SPACING_PX = 180;                         // distance between animals along the lane
         const spawnGapMs = (SPACING_PX / SPEED) * 1000; // time between spawns to keep spacing constant
 
@@ -2002,7 +2101,18 @@
 
         const lane = computeLaneFor(dir);
         // Telemetry for sanity while testing
-        console.log(`[Stream] θ=${thetaAbsDeg}°, dir=${dir}, speed=${SPEED}px/s, spacing=${SPACING_PX}px, laneVisibleLen=${Math.round(lane.visibleLen)}px`);
+        console.log(`[Stream] θ=${thetaAbsDeg}°, dir=${dir}, speed=${SPEED}px/s (×${speedMult}), spacing=${SPACING_PX}px, laneVisibleLen=${Math.round(lane.visibleLen)}px`);
+        // Save lane info into the last trial record if present
+        try {
+          if (Array.isArray(trialResults) && trialResults.length > 0) {
+            const t = trialResults[trialResults.length - 1];
+            t.laneLengthPx = Math.round(lane.visibleLen);
+            t.spriteW = lane.spriteW;
+            t.spriteH = lane.spriteH;
+            t.spacingPx = SPACING_PX;
+            if (typeof speedMult === 'number') t.speedMultiplier = speedMult;
+          }
+        } catch (_) {}
         if (lane.visibleLen < 2 * SPACING_PX) {
           console.warn(`[Stream] Warning: laneLength < 2*spacing; stream may look sparse.`);
         }
@@ -2241,6 +2351,8 @@
         window.correctAnswer = goesRightForMedium ? 'Q' : 'P';
       } else if (usedDifficulty === 'hard' && goesRightForHard !== null) {
         window.correctAnswer = goesRightForHard ? 'Q' : 'P';
+      } else if (usedDifficulty === 'adaptive') {
+        window.correctAnswer = (typeof goesRightForAdaptive !== 'undefined' && goesRightForAdaptive) ? 'Q' : 'P';
       } else if (usedDifficulty === 'veryHard' && goesRightForVeryHard !== null) {
         window.correctAnswer = goesRightForVeryHard ? 'Q' : 'P';
       } else {
@@ -2250,7 +2362,23 @@
       currentTry++;
 
       // Log distractor usage for this trial
-      trialResults.push({ type: distractorType, correct: false });
+      // Append trial metadata for logging and analytics
+      trialResults.push({
+        type: distractorType,
+        correct: false,
+        level: (selections.difficulty === 'adaptive') ? adaptiveState.level : null,
+        angleDeg: (selections.difficulty === 'adaptive') ? ADAPTIVE_ANGLES[adaptiveState.level] : angle,
+        corner: (usedDifficulty === 'adaptive') ? window._adaptiveDir : (usedDifficulty === 'medium' ? window._mediumDir : (usedDifficulty === 'hard' ? hardDir : (usedDifficulty === 'veryHard' ? veryHardDir : direction))),
+        goesRight: (usedDifficulty === 'adaptive') ? !!goesRightForAdaptive : (usedDifficulty === 'medium') ? !!goesRightForMedium : (usedDifficulty === 'hard') ? !!goesRightForHard : (usedDifficulty === 'veryHard') ? !!goesRightForVeryHard : (direction === 'Forward'),
+        latency: null,
+        streakUp: adaptiveState.streakUp,
+        streakDown: adaptiveState.streakDown,
+        speedMultiplier: (selections.difficulty === 'adaptive') ? (selections.adaptiveSpeedMultiplier || 1.0) : 1.0,
+        spacingPx: 180,
+        laneLengthPx: null,
+        spriteW: null,
+        spriteH: null
+      });
 
       // No timeout-based countdown trigger needed; countdown starts after last animal's animationend.
       document.getElementById('responseCountdown').textContent = '';
@@ -2422,6 +2550,12 @@
       const chartContainer = document.getElementById('chartContainer');
       document.getElementById('gameOver').appendChild(chartContainer); // Append chart to game over section
       chartContainer.style.display = 'block'; // Ensure the chart container is visible
+      // Summary banner
+      const total = trialResults.length;
+      const correct = trialResults.filter(t => t.correct).length;
+      const acc = total ? Math.round((correct / total) * 100) : 0;
+      const sumEl = document.getElementById('resultsSummary');
+      if (sumEl) sumEl.textContent = `Correct: ${correct}/${total} • Accuracy: ${acc}%`;
 
       // Group trial results by distractor type and in chunks of 5
       const groupedResults = { none: [], sound: [], visual: [] };
@@ -2503,6 +2637,14 @@
       if (hasVisual) {
         renderChart('visualDistractorChart', 'Visual Distractors', visualDistractorData, 'Attention Threshold (2)');
       }
+
+      // Build interactive trial timeline below charts
+      renderTrialTimeline();
+      setupResultsFilters();
+      // Scroll into view for visibility
+      setTimeout(() => {
+        try { document.getElementById('chartContainer').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
+      }, 150);
     }
 
     // Renders a single chart for a given distractor type (correct/incorrect per group)
@@ -2558,7 +2700,7 @@
       new Chart(ctx, {
         type: 'bar',
         data: {
-          labels,
+          labels: data.labels,
           datasets: [
             {
               label: 'Correct',
@@ -2578,12 +2720,14 @@
         },
         options: {
           responsive: true,
+          animation: { duration: 700, easing: 'easeOutQuart' },
           plugins: {
             title: {
               display: true,
               text: `${title} (${selections.difficulty === 'adaptive' ? 'Increasing Difficulty' : selections.difficulty.charAt(0).toUpperCase() + selections.difficulty.slice(1) + ' difficulty'})`,
               font: { size: 18 },
             },
+            legend: { labels: { boxWidth: 16 } },
             annotation: {
               annotations: {
                 threshold: {
@@ -2625,6 +2769,83 @@
       // Place interp and arrow directly after the canvas (interp below chart, arrow below interp)
       canvasEl.parentNode.insertBefore(interpP, canvasEl.nextSibling);
       canvasEl.parentNode.insertBefore(arrow, interpP.nextSibling);
+    }
+
+    // --- Interactive Trial Timeline ---
+    function renderTrialTimeline(filtered = null) {
+      const timeline = document.getElementById('trialTimeline');
+      if (!timeline) return;
+      const rows = filtered || trialResults;
+      if (!rows || rows.length === 0) {
+        timeline.innerHTML = '<p style="color:#000;opacity:0.8;">No trials to display.</p>';
+        return;
+      }
+      const html = ['<div class="timeline-grid">'];
+      rows.forEach((t, i) => {
+        const idx = i + 1;
+        const correct = !!t.correct;
+        const missed = t.latency == null && !correct;
+        const cls = missed ? 'miss' : (correct ? 'correct' : 'incorrect');
+        const type = (t.type || 'none');
+        const typeCls = `type-${type}`;
+        const goesRight = !!t.goesRight;
+        const corner = t.corner || '';
+        const angle = (typeof t.angleDeg === 'number') ? `${t.angleDeg}°` : '—';
+        const latency = (t.latencyMs != null) ? `${t.latencyMs} ms` : 'miss';
+        const speedMult = (t.speedMultiplier && t.speedMultiplier !== 1) ? `×${t.speedMultiplier}` : '×1.0';
+        // Minimal card by default; advanced details move inside .details
+        html.push(`
+          <div class="result-card ${cls}" data-index="${idx}">
+            <h4>Trial ${idx}</h4>
+            <div class="meta">
+              <span class="badge ${typeCls}">${type}</span>
+              <span>${correct ? 'Correct' : (missed ? 'Missed' : 'Incorrect')}</span>
+              <span>• RT: ${latency}</span>
+            </div>
+            <div class="details">
+              <div>Level: ${t.level ?? '—'} • Angle: ${angle}</div>
+              <div>Corner: ${corner} • Drift: ${goesRight ? 'Right' : 'Left'}</div>
+              <div>Speed: ${speedMult} • Spacing: ${t.spacingPx ?? 180}px</div>
+              <div>Lane Length: ${t.laneLengthPx ?? '—'} px • Sprite: ${t.spriteW ?? '—'}×${t.spriteH ?? '—'}</div>
+              <div>Streak Up: ${t.streakUp ?? 0} • Streak Down: ${t.streakDown ?? 0}</div>
+            </div>
+          </div>
+        `);
+      });
+      html.push('</div>');
+      timeline.innerHTML = html.join('');
+      // Toggle card details on click
+      timeline.querySelectorAll('.result-card').forEach(card => {
+        card.addEventListener('click', () => card.classList.toggle('open'));
+      });
+    }
+
+    function setupResultsFilters() {
+      const typeSel = document.getElementById('filterType');
+      const corrSel = document.getElementById('filterCorrect');
+      const toggleDetails = document.getElementById('toggleDetails');
+      if (!(typeSel && corrSel)) return;
+      const apply = () => {
+        const tval = typeSel.value; const cval = corrSel.value;
+        const filtered = trialResults.filter(tr => {
+          const typeOk = (tval === 'all') || (tr.type === tval) || (tval === 'none' && (!tr.type || tr.type === 'none'));
+          const miss = tr.latency == null && !tr.correct;
+          const corrOk = (cval === 'all') || (cval === 'correct' && tr.correct) || (cval === 'incorrect' && (!tr.correct && !miss)) || (cval === 'miss' && miss);
+          return typeOk && corrOk;
+        });
+        renderTrialTimeline(filtered);
+        // Apply details visibility preference
+        if (toggleDetails && toggleDetails.checked) {
+          document.querySelectorAll('#trialTimeline .result-card').forEach(c => c.classList.add('open'));
+        }
+      };
+      typeSel.onchange = apply; corrSel.onchange = apply;
+      if (toggleDetails) {
+        toggleDetails.onchange = () => {
+          const opened = toggleDetails.checked;
+          document.querySelectorAll('#trialTimeline .result-card').forEach(c => c.classList.toggle('open', opened));
+        };
+      }
     }
 
     // Toggles sound distractor on/off in settings
@@ -3070,7 +3291,7 @@
       </ul>
 
       <h3>🔹 3. What Controls Difficulty</h3>
-      <p>Difficulty dynamically updates based on how many responses were correct or incorrect in a row (2 correct increases difficulty, 2 wrong decreases it).</p>
+      <p>Adaptive mode (Up-only): starts at Level 0, promotes after 4 consecutive correct answers, never demotes, and runs for at least 15 trials. Optional “Adaptive (Fast)” runs the same logic at 1.35× speed.</p>
 
       <h3>🔹 4. Key Mechanics</h3>
       <ul>
@@ -3108,7 +3329,7 @@
       <li><strong>Direction = P:</li>
     </ul>
     <h3>🔹 3. What Controls Difficulty</h3>
-    <p>Difficulty dynamically updates based on how many responses were correct or incorrect in a row (2 correct increases difficulty, 2 wrong decreases it).</p>
+    <p>Adaptive mode (Up-only): starts at Level 0, promotes after 4 consecutive correct answers, never demotes, and runs for at least 15 trials. Optional “Adaptive (Fast)” runs the same logic at 1.35× speed.</p>
     <h3>🔹 4. Key Mechanics</h3>
     <ul>
       <li><strong>ang:</li>
